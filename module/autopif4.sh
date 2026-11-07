@@ -77,7 +77,7 @@ cd "$DIR";
 
 item "Crawling Android Developers for latest Pixel Beta device list ...";
 wget -q -T 10 -O PIXEL_VERSIONS_HTML --no-check-certificate "https://developer.android.com/about/versions" 2>&1 || exit 1;
-LATEST_BETA=$(grep -B4 -A2 'data-icon=\"preview' PIXEL_VERSIONS_HTML | grep -o 'href="/about/versions/.*[0-9]"' | cut -d\" -f2);
+LATEST_BETA=$(grep -B4 -A2 'data-icon="preview' PIXEL_VERSIONS_HTML | grep -o 'href="/about/versions/.*[0-9]"' | cut -d\" -f2);
 [ "$LATEST_BETA" ] || LATEST_BETA=$(grep -oE 'href="/about/versions/[0-9]{2}"' PIXEL_VERSIONS_HTML | cut -d\" -f2 | sort -ru | head -n1);
 wget -q -T 10 -O PIXEL_LATEST_HTML --no-check-certificate "https://developer.android.com$LATEST_BETA" 2>&1 || exit 1;
 wget -q -T 10 -O PIXEL_FI_HTML --no-check-certificate "https://developer.android.com$(grep -o 'href=".*download.*"' PIXEL_LATEST_HTML | grep -v 'ota' | cut -d\" -f2 | sort -ru | head -n1)" 2>&1 || exit 1;
@@ -87,6 +87,7 @@ MODEL_LIST="$(grep -A1 'tr id=' PIXEL_${SRC}_HTML | grep 'td' | sed 's;.*<td>\(.
 PRODUCT_LIST="$(grep 'tr id=' PIXEL_${SRC}_HTML | sed 's;.*<tr id="\(.*\)">.*;\1_beta;')";
 echo "$PRODUCT_LIST" | wc -w;
 
+item "Selecting Pixel Beta device ...";
 if [ "$FORCE_MATCH" ]; then
   DEVICE="$(getprop ro.product.device)";
   case "$(echo ' '$PRODUCT_LIST' ')" in
@@ -96,28 +97,37 @@ if [ "$FORCE_MATCH" ]; then
     ;;
   esac;
 fi;
-item "Selecting Pixel Beta device ...";
+set_random_beta() {
+  local list_count="$(echo "$MODEL_LIST" | wc -l)";
+  local list_rand="$((RANDOM % $list_count + 1))";
+  local IFS=$'\n';
+  set -- $MODEL_LIST;
+  MODEL="$(eval echo \${$list_rand})";
+  set -- $PRODUCT_LIST;
+  PRODUCT="$(eval echo \${$list_rand})";
+  DEVICE="$(echo "$PRODUCT" | sed 's/_beta//')";
+}
 if [ -z "$PRODUCT" ]; then
-  set_random_beta() {
-    local list_count="$(echo "$MODEL_LIST" | wc -l)";
-    local list_rand="$((RANDOM % $list_count + 1))";
-    local IFS=$'\n';
-    set -- $MODEL_LIST;
-    MODEL="$(eval echo \${$list_rand})";
-    set -- $PRODUCT_LIST;
-    PRODUCT="$(eval echo \${$list_rand})";
-    DEVICE="$(echo "$PRODUCT" | sed 's/_beta//')";
-  }
   set_random_beta;
 fi;
 echo "$MODEL ($PRODUCT)";
 
-item "Crawling Android Flash Tool for latest Pixel Canary build info ...";
-wget -q -T 10 -O PIXEL_FLASH_HTML --no-check-certificate "https://flash.android.com/" 2>&1 || exit 1;
-wget -q -T 10 -O PIXEL_STATION_JSON --header "Referer: https://flash.android.com" --no-check-certificate "https://content-flashstation-pa.googleapis.com/v1/builds?product=$PRODUCT&key=$(grep -o '<body data-client-config=.*' PIXEL_FLASH_HTML | cut -d\; -f2 | cut -d\& -f1)" 2>&1 || exit 1;
-tac PIXEL_STATION_JSON | grep -m1 -A13 '"canary": true' > PIXEL_CANARY_JSON;
-ID="$(grep 'releaseCandidateName' PIXEL_CANARY_JSON | cut -d\" -f4)";
-INCREMENTAL="$(grep 'buildId' PIXEL_CANARY_JSON | cut -d\" -f4)";
+get_canary_info() {
+  item "Crawling Android Flash Tool for latest Pixel Canary build info ...";
+  wget -q -T 10 -O PIXEL_FLASH_HTML --no-check-certificate "https://flash.android.com/" 2>&1 || exit 1;
+  wget -q -T 10 -O PIXEL_STATION_JSON --header "Referer: https://flash.android.com" --no-check-certificate "https://content-flashstation-pa.googleapis.com/v1/builds?product=$PRODUCT&key=$(grep -o '<body data-client-config=.*' PIXEL_FLASH_HTML | cut -d\; -f2 | cut -d\& -f1)" 2>&1 || exit 1;
+  tac PIXEL_STATION_JSON | grep -m1 -A13 '"canary": true' > PIXEL_CANARY_JSON;
+  ID="$(grep 'releaseCandidateName' PIXEL_CANARY_JSON | cut -d\" -f4)";
+  INCREMENTAL="$(grep 'buildId' PIXEL_CANARY_JSON | cut -d\" -f4)";
+}
+get_canary_info;
+if [ -z "$ID" -o -z "$INCREMENTAL" ] && [ "$FORCE_MATCH" ]; then
+  warn "Failed to extract matching build info from JSON";
+  item "Retrying with random Pixel Beta device ...";
+  set_random_beta;
+  echo "$MODEL ($PRODUCT)";
+  get_canary_info;
+fi;
 [ -z "$ID" -o -z "$INCREMENTAL" ] && die "Failed to extract build info from JSON";
 echo "Android $(grep 'releaseTrackVersionName' PIXEL_CANARY_JSON | cut -d\" -f4)";
 
@@ -160,6 +170,25 @@ if [ -z "$SECURITY_PATCH" ]; then
 fi;
 echo "$SECURITY_PATCH";
 
+item "Adding corresponding first API level ...";
+case $DEVICE in
+  bluejay) DEVICE_INITIAL_SDK_INT=32;; # Pixel 6a
+  panther|cheetah) DEVICE_INITIAL_SDK_INT=33;; # Pixel 7 Series
+  lynx) DEVICE_INITIAL_SDK_INT=33;; # Pixel 7a
+  felix) DEVICE_INITIAL_SDK_INT=33;; # Pixel Fold
+  tangorpro) DEVICE_INITIAL_SDK_INT=33;; # Pixel Tablet
+  shiba|husky) DEVICE_INITIAL_SDK_INT=34;; # Pixel 8 Series
+  akita) DEVICE_INITIAL_SDK_INT=34;; # Pixel 8a
+  tokay|caiman|komodo|comet) DEVICE_INITIAL_SDK_INT=34;; # Pixel 9 Series
+  tegu) DEVICE_INITIAL_SDK_INT=35;; # Pixel 9a
+  frankel|blazer|mustang|rango) DEVICE_INITIAL_SDK_INT=36;; # Pixel 10 Series
+  stallion) DEVICE_INITIAL_SDK_INT=35;; # Pixel 10a; Actual 36
+  cubs|grizzly|kodiak|yogi) DEVICE_INITIAL_SDK_INT=37;; # Pixel 11 Series
+  *) DEVICE_INITIAL_SDK_INT=37;;
+esac;
+echo "$DEVICE_INITIAL_SDK_INT";
+[ "$DEVICE_INITIAL_SDK_INT" -gt 35 ] && warn "First API level 36 and greater may require an RKP keybox to pass";
+
 item "Dumping values to minimal pif.prop ...";
 cat <<EOF | tee pif.prop;
 MANUFACTURER=Google
@@ -168,7 +197,7 @@ FINGERPRINT=google/$PRODUCT/$DEVICE:CANARY/$ID/$INCREMENTAL:user/release-keys
 PRODUCT=$PRODUCT
 DEVICE=$DEVICE
 SECURITY_PATCH=$SECURITY_PATCH
-DEVICE_INITIAL_SDK_INT=32
+DEVICE_INITIAL_SDK_INT=$DEVICE_INITIAL_SDK_INT
 EOF
 
 for MIGRATE in migrate.sh /data/adb/modules/playintegrityfix/migrate.sh; do
@@ -179,8 +208,7 @@ if [ -f "$MIGRATE" ]; then
     [ -f "$OLDPIF" ] && break;
   done;
   if [ -f "$OLDPIF" ]; then
-    grep -q '//"\*.security_patch"' $OLDPIF && PATCH_COMMENT=1;
-    grep -q '#\*.security_patch' $OLDPIF && PATCH_COMMENT=1;
+    grep -qE '//"*.security_patch"|#*.security_patch' $OLDPIF && PATCH_COMMENT=1;
     grep -qE "verboseLogs|VERBOSE_LOGS" $OLDPIF && ARGS="-a";
   else
     FORCE_STRONG=1;
@@ -191,7 +219,7 @@ if [ -f "$MIGRATE" ]; then
   else
     item "Retaining existing configuration ...";
   fi;
-  [ -d /data/adb/tricky_store ] && unset PATCH_COMMENT;
+  [ -d /data/adb/tricky_store -o -d /data/adb/teesim -o -d /data/adb/omk ] && unset PATCH_COMMENT;
   item "Converting pif.prop to custom.pif.prop with migrate.sh:";
   rm -f pif.json custom.pif.json custom.pif.prop;
   sh $MIGRATE -i $ARGS pif.prop;
@@ -212,7 +240,7 @@ if [ -f "$MIGRATE" ]; then
       [ -n "$TMPVAL" ] && sed -i "s;\($SETTING=\).;\1$TMPVAL;" custom.pif.prop;
     done;
   fi;
-  [ "$PATCH_COMMENT" ] && sed -i 's;\*.security_patch;#\*.security_patch;' custom.pif.prop;
+  [ "$PATCH_COMMENT" ] && sed -i 's;ro.build.version.security_patch;#ro.build.version.security_patch;' custom.pif.prop;
   echo "\n# Canary Released: $CANARY_REL_DATE\n# Estimated Expiry: $CANARY_EXP_DATE" >> custom.pif.prop;
   cat custom.pif.prop;
 fi;
@@ -232,11 +260,13 @@ if [ "$DIR" = /data/adb/modules/playintegrityfix/autopif4 ]; then
   item "Installing new prop ...";
   cp -fv $NEWNAME ..;
   TS_DIR=/data/adb/tricky_store;
-  if [ -d "$TS_DIR" ]; then
+  if [ -d /data/adb/teesim -o -d /data/adb/omk ]; then
+    warn "TEESimulator v4.x/Oh My KeyMint must be configured manually, ensure patch levels match ro.build.version.security_patch value";
+  elif [ -d "$TS_DIR" ]; then
     TS_SECPAT=$TS_DIR/security_patch.txt;
     touch $TS_SECPAT;
-    if [ -f /data/adb/modules/tricky_store/libTEESimulator.so ]; then
-      item "Updating TEESimulator security_patch.txt ...";
+    if [ -f /data/adb/modules/tricky_store/libTEESimulator.so -o -f /data/adb/modules/tricky_store/libTrickyStoreOSS.so ]; then
+      item "Updating TEESimulator/Tricky Store OSS security_patch.txt ...";
       if [ ! -s "$TS_SECPAT" ]; then
         cat <<EOF > $TS_SECPAT;
 all=
