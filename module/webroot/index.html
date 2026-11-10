@@ -241,7 +241,7 @@ async function refresh(){
   else{badge.textContent="● Custom";badge.className="badge custom";}
 
   $("#fp").textContent=has?fp:"No fingerprint — choose an option below.";
-  const name=map["MANUFACTURER"].value+" "+map["MODEL"].value;
+  const name=[val(map,"MANUFACTURER"),val(map,"MODEL")].filter(Boolean).join(" ");
   const apiTarget=map["*api_level"]||map["ro.product.first_api_level"];
   const api=apiTarget?"First API "+apiTarget.value:"";
   const patchTarget=map["*.security_patch"]||map["ro.build.version.security_patch"];
@@ -277,8 +277,23 @@ async function setFlag(k,v){
     const status = (k === "verboseLogs") ? v : (v === "1" ? "on" : "off");
     toast(`${LABEL[k] || k} ${status}`);
     log(`set ${k}=${v}`,"m");
+    await killPi();
   }
   catch(e){log(e.message,"e");}
+}
+
+async function migrateCfg(){
+  const r=await exec(`sh ${MOD}/migrate.sh ${CFG} 2>&1`);
+  if(!/No migration required/.test(r.stdout)){
+    log("$ migrate.sh","m");
+  }
+}
+
+async function killPi(){
+  log("$ killpi.sh","g");
+  const r=await exec(`sh ${MOD}/killpi.sh 2>&1`);
+  (r.stdout||"").replace(/\n$/,"").split("\n").filter(Boolean).forEach(l=>log(l,"m"));
+  log("✓ PI processes killed","g");
 }
 
 function busy(b){document.querySelectorAll("button").forEach(x=>x.disabled=b);$("#refresh").disabled=false;}
@@ -314,6 +329,9 @@ async function handleFileSelect(event) {
   reader.onload = async function(e) {
     try {
       const text = e.target.result;
+      if (!/^\s*MANUFACTURER\s*=\s*\S+/m.test(text) || !/^\s*MODEL\s*=\s*\S+/m.test(text)) {
+        log("⚠ Warning: Invalid print (missing MANUFACTURER or MODEL)", "w");
+      }
       // Base64 encode to safely pass file contents through the root shell
       const b64 = btoa(unescape(encodeURIComponent(text)));
 
@@ -321,12 +339,10 @@ async function handleFileSelect(event) {
       log(`✓ Copied ${file.name} to ${CFG}`, "g");
 
       // Ensure Advanced Settings entries exist in imported prop
-      log("$ migrate.sh", "m");
-      await exec(`sh ${MOD}/migrate.sh ${CFG}`);
+      await migrateCfg();
 
       // Restart PI processes to apply the print (bypassing autopif4)
-      log("$ killpi.sh", "m");
-      await exec(`sh ${MOD}/killpi.sh`);
+      await killPi();
 
       toast("Local print applied");
     } catch (err) {
@@ -360,6 +376,9 @@ async function submitCustomUrl() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const text = await response.text();
+    if (!/^\s*MANUFACTURER\s*=\s*\S+/m.test(text) || !/^\s*MODEL\s*=\s*\S+/m.test(text)) {
+      log("⚠ Warning: Invalid print (missing MANUFACTURER or MODEL)", "w");
+    }
     // Base64 encode to safely pass file contents through the root shell
     const b64 = btoa(unescape(encodeURIComponent(text)));
 
@@ -367,12 +386,10 @@ async function submitCustomUrl() {
     log("✓ Download successful", "g");
 
     // Ensure Advanced Settings entries exist in downloaded prop
-    log("$ migrate.sh", "m");
-    await exec(`sh ${MOD}/migrate.sh ${CFG}`);
+    await migrateCfg();
 
     // Restart PI processes to apply the print
-    log("$ killpi.sh", "m");
-    await exec(`sh ${MOD}/killpi.sh`);
+    await killPi();
 
     toast("URL print applied");
   } catch (err) {
@@ -386,7 +403,7 @@ async function submitCustomUrl() {
 $("#segMatch").onclick=()=>setSource("match");
 $("#segRandom").onclick=()=>setSource("random");
 $("#reapply").onclick=async()=>{const rand=$("#segRandom").classList.contains("on");await setSource(rand?"random":"match");};
-$("#killPi").onclick=async()=>{busy(true);$("#outBox").open=true;log("\n$ killpi","g");try{const r=await exec(`sh ${MOD}/killpi.sh 2>&1`);(r.stdout||"").replace(/\n$/,"").split("\n").forEach(l=>log(l,"m"));log("✓ PI processes killed","g");}catch(e){log(e.message,"e");}busy(false);};
+$("#killPi").onclick=async()=>{busy(true);$("#outBox").open=true;log("","g");try{await killPi();}catch(e){log(e.message,"e");}busy(false);};
 $("#refresh").onclick=refresh;
 $("#verboseSelect").onchange = (e) => setFlag("verboseLogs", e.target.value);
 
