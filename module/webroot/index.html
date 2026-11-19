@@ -65,7 +65,6 @@
   button:disabled{opacity:.5;pointer-events:none}
 
   /* import */
-  #filePicker{display:none}
   .import-flag{padding:6px 2px;margin:10px 0 4px}
   .input-base{width:100%;background:var(--surface2);border:1px solid var(--line);color:var(--text);padding:10px;border-radius:11px}
   .browse-btn{font-size:.85rem;font-weight:600;cursor:pointer;margin-bottom:15px}
@@ -111,6 +110,12 @@
   #confirmModal{align-items:center}
   .confirm-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);width:100%;max-width:340px;padding:16px;touch-action:auto}
   .confirm-msg{font-size:.92rem;color:var(--text);margin-bottom:14px}
+  .picker-list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;margin-top:4px}
+  .picker-item{width:100%;text-align:left;background:var(--bg);border:1px solid var(--line);color:var(--text);padding:10px 12px;border-radius:10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.78rem;cursor:pointer;word-break:break-all}
+  .picker-item:active{background:var(--surface2)}
+  .picker-item.dir{color:var(--accent-soft);font-weight:600}
+  .picker-item.prop{border-color:color-mix(in srgb,var(--ok) 45%,transparent);color:var(--ok)}
+  .picker-item.other{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -155,9 +160,8 @@
         <span class="sw"><input type="checkbox" id="migrateForce"><i></i></span>
       </label>
 
-      <div class="hint" style="margin:10px 0">Select a local .prop file via Android File Picker:</div>
-      <input type="file" id="filePicker" onchange="handleFileSelect(event)">
-      <button onclick="document.getElementById('filePicker').click()" class="input-base browse-btn">Browse Local Storage...</button>
+      <div class="hint" style="margin:10px 0">Select a local .prop/.json/.txt file from storage:</div>
+      <button onclick="openFilePicker()" class="input-base browse-btn">Browse Local Storage...</button>
 
       <div class="hint" style="margin:0 0 10px">Or download a .prop file via URL:</div>
       <input type="text" id="customPrintInput" placeholder="https://..." class="input-base custom-input">
@@ -234,6 +238,21 @@
     <div class="util mt-0">
       <button id="confirmNo">No</button>
       <button class="primary" id="confirmYes">Yes</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="pickerModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <span class="lbl" id="pickerPath">/sdcard/Download</span>
+      <button class="ic" onclick="closeFilePicker()" title="Close">✕</button>
+    </div>
+    <div id="pickerList" class="picker-list"></div>
+    <div class="util">
+      <button onclick="openFilePicker('/sdcard/Download')">Download</button>
+      <button onclick="openFilePicker('/sdcard')">/sdcard</button>
+      <button onclick="closeFilePicker()">Cancel</button>
     </div>
   </div>
 </div>
@@ -390,31 +409,79 @@ async function setFlag(k,v){
   } catch(e){log(e.message,"e");}
 }
 
-async function handleFileSelect(event) {
-  const file = event.target.files[0];
-  if (!file) return;
+const shQ = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
+let pickerDir = "/sdcard/Download";
 
+async function openFilePicker(dir) {
+  pickerDir = (dir || pickerDir || "/sdcard").replace(/\/+$/, "") || "/";
+  const modal = $("#pickerModal");
+  $("#pickerPath").textContent = pickerDir;
+  const list = $("#pickerList");
+  list.innerHTML = '<div class="hint" style="padding:8px">Loading…</div>';
+  modal.classList.add("open");
+  document.body.style.overflow = "hidden";
+  try {
+    const r = await exec(`cd ${shQ(pickerDir)} 2>/dev/null && for f in *; do [ -e "$f" ] || continue; [ -d "$f" ] && printf 'D\\t%s\\n' "$f" || printf 'F\\t%s\\n' "$f"; done`);
+    const dirs = [], props = [], others = [];
+    (r.stdout || "").split("\n").filter(Boolean).forEach(line => {
+      const t = line[0], n = line.slice(2);
+      if (!n) return;
+      if (t === "D") dirs.push(n);
+      else if (/\.(prop|json|txt)$/i.test(n)) props.push(n);
+      else others.push(n);
+    });
+    dirs.sort((a,b) => a.localeCompare(b));
+    props.sort((a,b) => a.localeCompare(b));
+    others.sort((a,b) => a.localeCompare(b));
+    list.innerHTML = "";
+    const join = (d, n) => (d === "/" ? "/" : d + "/") + n;
+    const addRow = (label, cls, fn) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "picker-item " + cls;
+      b.textContent = label;
+      b.onclick = fn;
+      list.appendChild(b);
+    };
+    if (pickerDir !== "/") {
+      const parent = pickerDir.slice(0, pickerDir.lastIndexOf("/")) || "/";
+      addRow("↩ ..", "dir", () => openFilePicker(parent));
+    }
+    dirs.forEach(n => addRow("📁 " + n, "dir", () => openFilePicker(join(pickerDir, n))));
+    props.forEach(n => addRow("📄 " + n, "prop", () => importLocalPath(join(pickerDir, n), n)));
+    others.forEach(n => addRow(n, "other", () => importLocalPath(join(pickerDir, n), n)));
+    if (!dirs.length && !props.length && !others.length) {
+      list.innerHTML = '<div class="hint" style="padding:8px">Empty folder.</div>';
+    }
+  } catch(e) {
+    list.innerHTML = '<div class="hint" style="padding:8px">Failed to read folder.</div>';
+    log(e.message, "e");
+  }
+}
+
+function closeFilePicker() {
+  $("#pickerModal").classList.remove("open");
+  document.body.style.overflow = "";
+}
+
+async function importLocalPath(path, name) {
+  closeFilePicker();
   busy(true);
   await refresh();
   $("#outBox").open = true;
   toast("Reading fingerprint from file…");
-  const reader = new FileReader();
-  reader.onload = async function(e) {
-    try {
-      const text = e.target.result;
-      // Base64 encode to safely pass file contents through the root shell
-      const b64 = btoa(unescape(encodeURIComponent(text)));
-      await exec(`echo "${b64}" | base64 -d > ${CFG}`);
-      log(`Copied ${file.name} to ${CFG}`, "m");
-      await migrateCfg($("#migrateForce").checked?"-p":"");
-      await killPi();
-      log(`✓ Local fingerprint applied`, "g");
-    } catch(err){log(err.message,"e");}
-    await refresh();
-    busy(false);
-    event.target.value = ""; // Reset picker
-  };
-  reader.readAsText(file);
+  try {
+    const r = await exec(`cp -f ${shQ(path)} ${CFG} 2>&1`);
+    if (r.errno !== 0) throw new Error(r.stdout || "Copy failed");
+    log(`Copied ${name} to ${CFG}`, "m");
+    await migrateCfg($("#migrateForce").checked ? "-p" : "");
+    await killPi();
+    log("✓ Local fingerprint applied", "g");
+  } catch(err) {
+    log(err.message, "e");
+  }
+  await refresh();
+  busy(false);
 }
 
 async function submitCustomUrl() {
