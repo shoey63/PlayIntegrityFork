@@ -289,6 +289,32 @@ function exec(cmd,opts){
   });
 }
 
+async function execStream(cmd,onLine){
+  const id=Date.now()+"_"+Math.floor(Math.random()*1e6);
+  const s=await exec(`D=/tmp; [ -d "$D" ] && [ -w "$D" ] || D=/data/local/tmp; F="$D/.pif_${id}"; : >"$F.log"; ( ( ${cmd} ) >"$F.log" 2>&1; echo $? >"$F.rc" ) </dev/null >/dev/null 2>&1 & printf '%s' "$F"`);
+  const f=(s.stdout||"").trim();
+  if(!f){
+    const r=await exec(`${cmd} 2>&1`);
+    (r.stdout||"").replace(/\n$/,"").split("\n").forEach(onLine);
+    return r;
+  }
+  let seen=0,rc=1;
+  try{
+    for(let i=0;i<480;i++){
+      const r=await exec(`rc=$(cat "${f}.rc" 2>/dev/null); n=$(wc -l < "${f}.log" 2>/dev/null | tr -d ' '); echo "__META__:\${n:-0}:\${rc}"; if [ -n "$rc" ]; then sed -n "$((${seen}+1)),\\$p" "${f}.log" 2>/dev/null; elif [ "\${n:-0}" -gt ${seen} ]; then sed -n "$((${seen}+1)),\${n}p" "${f}.log" 2>/dev/null; fi`);
+      const out=r.stdout||"",nl=out.indexOf("\n");
+      const m=(nl<0?out:out.slice(0,nl)).match(/^__META__:(\d+):(.*)$/);
+      if(!m)break;
+      const n=parseInt(m[1],10)||0,done=m[2].trim();
+      const rest=nl<0?"":out.slice(nl+1).replace(/\n$/,"");
+      if(n>seen||(done!==""&&rest)){rest.split("\n").forEach(onLine);seen=n;}
+      if(done!==""){rc=parseInt(done,10)||0;break;}
+      await new Promise(res=>setTimeout(res,250));
+    }
+  }finally{await exec(`rm -f "${f}.log" "${f}.rc"`).catch(()=>{});}
+  return {errno:rc};
+}
+
 function toast(m){try{if(typeof ksu!=="undefined"&&ksu.toast)ksu.toast(m);}catch(e){}}
 
 function busy(b){document.querySelectorAll("button").forEach(x=>x.disabled=b);$("#refresh").disabled=false;$("#termExpand").disabled=false;}
@@ -373,8 +399,7 @@ async function autoPif(mode){
   const args=(mode==="random")?"":"-m";
   log("\n# autopif4.sh "+args,"g");
   try{
-    const r=await exec(`sh ${MOD}/autopif4.sh ${args} 2>&1`);
-    (r.stdout||"").replace(/\n$/,"").split("\n").forEach(l=>log(l,/error|fail/i.test(l)?"e":(/warn/i.test(l)?"w":null)));
+    const r=await execStream(`sh ${MOD}/autopif4.sh ${args}`,l=>log(l,/error|fail/i.test(l)?"e":(/warn/i.test(l)?"w":null)));
     log(r.errno===0?"✓ Canary fingerprint applied":"✗ exit "+r.errno,r.errno===0?"g":"e");
   } catch(e){log(e.message,"e");}
   await refresh();
